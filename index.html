@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Lurup 3D – Echte OSM-Karte</title>
+<style>
+  :root{ --blau:#005CA9; --gelb:#FFD500; --dunkel:#16222e; }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{width:100%;height:100%;overflow:hidden;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:#87b5d8;touch-action:none}
+  canvas#welt{display:block}
+  .karte{background:rgba(255,255,255,.93);border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.25)}
+
+  #liste{position:fixed;top:10px;left:10px;padding:10px 12px;max-width:200px;pointer-events:auto;font-size:13px;z-index:5}
+  #liste h2{font-size:13px;color:var(--blau);margin-bottom:6px;letter-spacing:.3px}
+  #liste ul{list-style:none}
+  #liste li{padding:2px 0;color:#333;display:flex;gap:6px;align-items:center}
+  #liste li.done{color:#1a8f3c;text-decoration:line-through}
+  #liste li .punkt{width:10px;height:10px;border-radius:3px;flex:none}
+  #listeToggle{pointer-events:auto;position:fixed;top:10px;left:10px;display:none;padding:8px 10px;font-size:14px;border:none;background:rgba(255,255,255,.93);border-radius:12px;z-index:6}
+
+  #minimap{position:fixed;top:10px;right:10px;padding:6px;pointer-events:none;z-index:5}
+  #minimap canvas{display:block;border-radius:8px}
+
+  #modus{position:fixed;top:10px;left:50%;transform:translateX(-50%);display:flex;gap:6px;pointer-events:auto;padding:5px;z-index:5}
+  #modus button{border:2px solid transparent;background:#eef3f8;border-radius:9px;font-size:20px;width:44px;height:40px;cursor:pointer}
+  #modus button.aktiv{border-color:var(--blau);background:#dcebf9}
+
+  #tacho{position:fixed;bottom:150px;left:50%;transform:translateX(-50%);padding:4px 12px;font-size:13px;color:#234;pointer-events:none;z-index:5;white-space:nowrap}
+
+  #shopBtn,#heimBtn{position:fixed;bottom:210px;left:50%;transform:translateX(-50%);padding:12px 20px;font-size:16px;font-weight:600;color:#fff;background:#1a8f3c;border:none;border-radius:999px;box-shadow:0 3px 12px rgba(0,0,0,.3);pointer-events:auto;display:none;cursor:pointer;z-index:6;max-width:90vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #heimBtn{background:var(--blau)}
+
+  .steuer{position:fixed;bottom:16px;display:flex;gap:12px;pointer-events:auto;z-index:6}
+  #steuerL{left:16px}
+  #steuerR{right:16px;flex-direction:column}
+  .steuer button{width:62px;height:62px;border-radius:50%;border:none;background:rgba(255,255,255,.85);font-size:26px;color:#234;box-shadow:0 2px 8px rgba(0,0,0,.25);cursor:pointer;user-select:none;-webkit-user-select:none}
+  .steuer button:active{background:var(--gelb)}
+
+  .overlay{position:fixed;inset:0;background:rgba(10,25,40,.78);display:flex;align-items:center;justify-content:center;z-index:20;pointer-events:auto;padding:20px}
+  .overlay .box{background:#fff;border-radius:16px;padding:24px 22px;max-width:400px;text-align:center}
+  .overlay h1{font-size:21px;color:var(--dunkel);margin-bottom:10px}
+  .overlay p{font-size:14px;color:#445;line-height:1.5;margin-bottom:8px}
+  .overlay button{margin-top:10px;padding:12px 22px;font-size:15px;font-weight:600;background:var(--blau);color:#fff;border:none;border-radius:999px;cursor:pointer}
+  .overlay button.zweit{background:#eef3f8;color:var(--blau)}
+  .overlay .hinweis{font-size:12px;color:#889;margin-top:6px}
+  #winOverlay{display:none}
+  #ladeStatus{font-size:14px;color:var(--blau);font-weight:600;min-height:20px}
+  #balkenRahmen{height:8px;background:#e4ecf4;border-radius:99px;margin:10px 0;overflow:hidden;display:none}
+  #balken{height:100%;width:0%;background:var(--blau);border-radius:99px;transition:width .2s}
+  .spinner{width:32px;height:32px;border:4px solid #dcebf9;border-top-color:var(--blau);border-radius:50%;margin:8px auto;animation:dreh 1s linear infinite;display:none}
+  @keyframes dreh{to{transform:rotate(360deg)}}
+  #startBtn,#retryBtn{display:none}
+
+  #toast{position:fixed;top:64px;left:50%;transform:translateX(-50%);background:var(--dunkel);color:#fff;padding:10px 18px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:15;white-space:nowrap;max-width:92vw;overflow:hidden;text-overflow:ellipsis}
+
+  @media (max-width:520px){
+    #liste{display:none}
+    #listeToggle{display:block}
+    #liste.offen{display:block;top:52px}
+    #minimap canvas{width:110px;height:110px}
+  }
+</style>
+</head>
+<body>
+<canvas id="welt"></canvas>
+
+<button id="listeToggle">🛒 Liste</button>
+<div id="liste" class="karte">
+  <h2>EINKAUFSLISTE</h2>
+  <ul id="listeUl"></ul>
+</div>
+<div id="minimap" class="karte"><canvas id="mini" width="150" height="150"></canvas></div>
+<div id="modus" class="karte">
+  <button id="mAuto" class="aktiv" title="Auto">🚗</button>
+  <button id="mRad" title="Fahrrad">🚲</button>
+  <button id="mFuss" title="Zu Fuß">🚶</button>
+</div>
+<div id="tacho" class="karte">0 km/h</div>
+<button id="shopBtn">🛒 Einkaufen</button>
+<button id="heimBtn">🏠 Feierabend – nach Hause!</button>
+
+<div class="steuer" id="steuerL"><button id="bLinks">◀</button><button id="bRechts">▶</button></div>
+<div class="steuer" id="steuerR"><button id="bGas">▲</button><button id="bBrems">▼</button></div>
+
+<div class="overlay" id="startOverlay">
+  <div class="box">
+    <h1>🗺️ Lurup 3D – Echte OSM-Karte</h1>
+    <p id="introText">Baut Lurup aus <b>echten OpenStreetMap-Daten</b> auf: reale Gebäude, echtes Straßennetz, Läden an ihren tatsächlichen Standorten. Wähle den Kartenausschnitt:</p>
+    <div id="gebietWahl">
+      <button id="btnKlein">⚡ Lurup-Kern (schnell, ~1–2 MB)</button><br>
+      <button id="btnGross" class="zweit">🗺️ Lurup + Eidelstedt (größer, ~3–6 MB)</button>
+    </div>
+    <div class="spinner" id="spinner"></div>
+    <div id="balkenRahmen"><div id="balken"></div></div>
+    <p id="ladeStatus"></p>
+    <p class="hinweis" id="ladeHinweis"></p>
+    <button id="startBtn">Los geht's!</button>
+    <button id="retryBtn">Nochmal versuchen</button>
+  </div>
+</div>
+
+<div class="overlay" id="winOverlay">
+  <div class="box">
+    <h1>🎉 Einkaufstour geschafft!</h1>
+    <p id="winText"></p>
+    <button onclick="location.reload()">Nochmal fahren</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+'use strict';
+// ==================================================================
+// Konfiguration – Kartenausschnitte (Hamburg-Lurup)
+// ==================================================================
+const GEBIETE = {
+  klein: {sued:53.5865, west:9.8620, nord:53.6045, ost:9.8920},  // Lurup-Kern
+  gross: {sued:53.5840, west:9.8580, nord:53.6120, ost:9.9120}   // + Eidelstedter Platz
+};
+let BBOX=null, LAT0=0, LON0=0, M_LON=1;
+const M_LAT = 111320;
+function projiziere(lat,lon){ return { x:(lon-LON0)*M_LON, z:(LAT0-lat)*M_LAT }; }
+
+const HEIM_LATLON = {lat:53.5947, lon:9.8705};   // Wohngegend Lüttkamp/Flurstraße
+const ENDPUNKTE = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter'
+];
+const FETCH_TIMEOUT = 40000; // 40 s pro Server, dann nächster
+
+const MARKEN = [
+  ['kaufland','#e10915'], ['bauhaus','#c8102e'], ['globus','#f39100'],
+  ['aldi','#00549f'],     ['lidl','#0050aa'],    ['netto','#ffd400'],
+  ['penny','#cc0000'],    ['rewe','#cc071e'],    ['edeka','#ffd500'],
+  ['budni','#e2001a'],    ['rossmann','#c3002d'],['dm','#fdc300'],
+  ['famila','#0072bc'],   ['marktkauf','#e30613']
+];
+const MALL_FARBE = '#7a4ea6';
+const MAX_ZIELE = 10;
+
+// ==================================================================
+// Three.js Grundaufbau
+// ==================================================================
+const renderer = new THREE.WebGLRenderer({canvas:document.getElementById('welt'), antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth, innerHeight);
+
+const szene = new THREE.Scene();
+szene.background = new THREE.Color(0x9cc4e0);
+szene.fog = new THREE.Fog(0x9cc4e0, 260, 700);
+
+const kamera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, .1, 1400);
+szene.add(new THREE.HemisphereLight(0xe8f1ff, 0x44603a, 0.9));
+const sonne = new THREE.DirectionalLight(0xfff0d4, 0.95);
+sonne.position.set(200, 320, 140);
+szene.add(sonne);
+
+// ==================================================================
+// UI-Helfer fürs Laden
+// ==================================================================
+const statusEl=document.getElementById('ladeStatus');
+const hinweisEl=document.getElementById('ladeHinweis');
+const balkenRahmen=document.getElementById('balkenRahmen');
+const balken=document.getElementById('balken');
+const spinner=document.getElementById('spinner');
+function status(t){ statusEl.textContent=t; }
+function fortschritt(p){ balkenRahmen.style.display='block'; balken.style.width=Math.min(100,Math.round(p))+'%'; }
+function pause(){ return new Promise(r=>setTimeout(r,0)); }
+
+// ==================================================================
+// OSM-Daten laden – mit Timeout, Mirrors und Fortschritt
+// ==================================================================
+function baueQuery(b){
+  return `[out:json][timeout:60];
+(
+  way["building"](${b.sued},${b.west},${b.nord},${b.ost});
+  way["highway"~"^(primary|secondary|tertiary|residential|unclassified|living_street|service|pedestrian|footway|path|cycleway|track)$"](${b.sued},${b.west},${b.nord},${b.ost});
+  node["shop"~"^(supermarket|mall|doityourself|department_store|discount|chemist|variety_store)$"](${b.sued},${b.west},${b.nord},${b.ost});
+  way["shop"~"^(supermarket|mall|doityourself|department_store|discount|chemist|variety_store)$"](${b.sued},${b.west},${b.nord},${b.ost});
+);
+out geom 60000;`;
+}
+
+async function ladeVonServer(url, query){
+  const ab=new AbortController();
+  let timer=setTimeout(()=>ab.abort(), FETCH_TIMEOUT);
+  const timerNeu=()=>{ clearTimeout(timer); timer=setTimeout(()=>ab.abort(), FETCH_TIMEOUT); };
+  try{
+    const antwort=await fetch(url,{
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:'data='+encodeURIComponent(query),
+      signal:ab.signal
+    });
+    if(!antwort.ok) throw new Error('HTTP '+antwort.status);
+    // Stückweise lesen, damit man den Fortschritt sieht
+    const reader=antwort.body ? antwort.body.getReader() : null;
+    if(!reader){ return await antwort.json(); }
+    const teile=[]; let geladen=0;
+    const gesamt=parseInt(antwort.headers.get('Content-Length'))||0;
+    while(true){
+      const {done,value}=await reader.read();
+      if(done) break;
+      timerNeu(); // solange Daten fließen, nicht abbrechen
+      teile.push(value); geladen+=value.length;
+      const mb=(geladen/1048576).toFixed(1);
+      if(gesamt>0){ fortschritt(geladen/gesamt*100); status('Lade Kartendaten… '+mb+' MB'); }
+      else status('Lade Kartendaten… '+mb+' MB');
+    }
+    status('Verarbeite Kartendaten…'); await pause();
+    const blob=new Blob(teile);
+    const text=await blob.text();
+    return JSON.parse(text);
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
+async function ladeOSM(query){
+  let fehler=null;
+  for(let i=0;i<ENDPUNKTE.length;i++){
+    const host=ENDPUNKTE[i].replace('https://','').split('/')[0];
+    try{
+      status('Verbinde mit '+host+' ('+(i+1)+'/'+ENDPUNKTE.length+')…');
+      return await ladeVonServer(ENDPUNKTE[i], query);
+    }catch(e){
+      fehler=e;
+      status('⚠️ '+host+' nicht erreichbar – versuche nächsten Server…');
+      await new Promise(r=>setTimeout(r,400));
+    }
+  }
+  throw fehler||new Error('Keine Verbindung');
+}
+
+// ==================================================================
+// Geometrie-Aufbau
+// ==================================================================
+const roadSegs=[]; const miniRoads=[];
+const hashZellen=new Map(); const ZELLE=40;
+function hashAdd(box){
+  const c0x=Math.floor(box.minX/ZELLE), c1x=Math.floor(box.maxX/ZELLE);
+  const c0z=Math.floor(box.minZ/ZELLE), c1z=Math.floor(box.maxZ/ZELLE);
+  for(let cx=c0x;cx<=c1x;cx++)for(let cz=c0z;cz<=c1z;cz++){
+    const k=cx+'_'+cz;
+    if(!hashZellen.has(k)) hashZellen.set(k,[]);
+    hashZellen.get(k).push(box);
+  }
+}
+function kollidiert(x,z,r){
+  const cx=Math.floor(x/ZELLE), cz=Math.floor(z/ZELLE);
+  for(let ix=cx-1;ix<=cx+1;ix++)for(let iz=cz-1;iz<=cz+1;iz++){
+    const arr=hashZellen.get(ix+'_'+iz);
+    if(!arr) continue;
+    for(const b of arr)
+      if(x>b.minX-r && x<b.maxX+r && z>b.minZ-r && z<b.maxZ+r) return true;
+  }
+  return false;
+}
+
+const STRASSEN_STIL = {
+  primary:      {b:11, y:0.06, f:[0.27,0.28,0.30]},
+  secondary:    {b:10, y:0.06, f:[0.28,0.29,0.31]},
+  tertiary:     {b:9,  y:0.055,f:[0.29,0.30,0.32]},
+  residential:  {b:7,  y:0.05, f:[0.31,0.32,0.34]},
+  unclassified: {b:7,  y:0.05, f:[0.31,0.32,0.34]},
+  living_street:{b:6,  y:0.05, f:[0.36,0.36,0.38]},
+  service:      {b:4,  y:0.04, f:[0.38,0.38,0.40]},
+  pedestrian:   {b:4,  y:0.07, f:[0.55,0.53,0.48]},
+  footway:      {b:2,  y:0.07, f:[0.58,0.55,0.48]},
+  path:         {b:2,  y:0.07, f:[0.52,0.48,0.40]},
+  cycleway:     {b:2.2,y:0.065,f:[0.45,0.30,0.28]},
+  track:        {b:2.5,y:0.04, f:[0.48,0.42,0.32]}
+};
+
+function baueStrassen(wege){
+  const pos=[], col=[];
+  for(const w of wege){
+    const stil=STRASSEN_STIL[w.tags.highway];
+    if(!stil||!w.geometry) continue;
+    const pts=w.geometry.map(p=>projiziere(p.lat,p.lon));
+    const fahrbar=!['footway','path','pedestrian','cycleway'].includes(w.tags.highway);
+    for(let i=0;i<pts.length-1;i++){
+      const a=pts[i], b=pts[i+1];
+      const dx=b.x-a.x, dz=b.z-a.z, len=Math.hypot(dx,dz);
+      if(len<0.1) continue;
+      const nx=-dz/len*stil.b/2, nz=dx/len*stil.b/2;
+      const y=stil.y;
+      pos.push(a.x+nx,y,a.z+nz,  b.x+nx,y,b.z+nz,  b.x-nx,y,b.z-nz);
+      pos.push(a.x+nx,y,a.z+nz,  b.x-nx,y,b.z-nz,  a.x-nx,y,a.z-nz);
+      for(let k=0;k<6;k++) col.push(stil.f[0],stil.f[1],stil.f[2]);
+      if(fahrbar) roadSegs.push([a.x,a.z,b.x,b.z]);
+      miniRoads.push([a.x,a.z,b.x,b.z,w.tags.highway]);
+    }
+  }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col,3));
+  szene.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({vertexColors:true})));
+}
+
+const DACH_FARBEN=[[0.62,0.33,0.26],[0.55,0.30,0.25],[0.45,0.44,0.46],[0.58,0.36,0.24],[0.50,0.42,0.36]];
+async function baueGebaeude(wege, shopWayFarben){
+  const pos=[], col=[];
+  let anzahl=0;
+  for(let wi=0; wi<wege.length; wi++){
+    if(wi%400===0){
+      status('Baue Gebäude… '+wi.toLocaleString('de-DE')+' / '+wege.length.toLocaleString('de-DE'));
+      fortschritt(wi/wege.length*100);
+      await pause();
+    }
+    const w=wege[wi];
+    if(!w.geometry||w.geometry.length<4) continue;
+    const g0=w.geometry[0], gN=w.geometry[w.geometry.length-1];
+    if(Math.abs(g0.lat-gN.lat)>1e-7||Math.abs(g0.lon-gN.lon)>1e-7) continue;
+    let pts=w.geometry.slice(0,-1).map(p=>{const q=projiziere(p.lat,p.lon); return new THREE.Vector2(q.x,q.z);});
+    if(pts.length<3) continue;
+    if(THREE.ShapeUtils.area(pts)<0) pts=pts.reverse();
+
+    const t=w.tags;
+    let h=parseFloat(t.height);
+    if(!isFinite(h)){
+      const lv=parseFloat(t['building:levels']);
+      if(isFinite(lv)) h=lv*3.1+1;
+      else if(['garage','garages','shed','hut','roof','carport'].includes(t.building)) h=2.7;
+      else h=4.5+(w.id%40)/10;
+    }
+    h=Math.min(Math.max(h,2.4),45);
+
+    let wand=[0.85,0.82,0.75], dach=DACH_FARBEN[w.id%DACH_FARBEN.length];
+    const marke=shopWayFarben.get(w.id);
+    if(marke){
+      const c=new THREE.Color(marke);
+      dach=[c.r,c.g,c.b];
+      wand=[Math.min(1,c.r*0.4+0.6),Math.min(1,c.g*0.4+0.6),Math.min(1,c.b*0.4+0.6)];
+    }else{
+      const ton=0.86+((w.id>>3)%10)/70;
+      wand=wand.map(v=>Math.min(1,v*ton));
+    }
+
+    let minX=1e9,maxX=-1e9,minZ=1e9,maxZ=-1e9;
+    for(const p of pts){minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);minZ=Math.min(minZ,p.y);maxZ=Math.max(maxZ,p.y);}
+    hashAdd({minX,maxX,minZ,maxZ});
+
+    let tris;
+    try{ tris=THREE.ShapeUtils.triangulateShape(pts,[]); }catch(e){ continue; }
+    for(const tri of tris){
+      for(const i of tri){ pos.push(pts[i].x,h,pts[i].y); col.push(dach[0],dach[1],dach[2]); }
+    }
+    for(let i=0;i<pts.length;i++){
+      const a=pts[i], b=pts[(i+1)%pts.length];
+      pos.push(a.x,0,a.y,  b.x,0,b.y,  b.x,h,b.y);
+      pos.push(a.x,0,a.y,  b.x,h,b.y,  a.x,h,a.y);
+      for(let k=0;k<6;k++) col.push(wand[0],wand[1],wand[2]);
+    }
+    anzahl++;
+  }
+  status('Berechne Beleuchtung…'); await pause();
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col,3));
+  geo.computeVertexNormals();
+  szene.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({vertexColors:true, side:THREE.DoubleSide})));
+  return anzahl;
+}
+
+function naechsterStrassenpunkt(x,z){
+  let best={x,z,d:1e12};
+  for(const s of roadSegs){
+    const dx=s[2]-s[0], dz=s[3]-s[1];
+    const l2=dx*dx+dz*dz;
+    let t=l2>0?((x-s[0])*dx+(z-s[1])*dz)/l2:0;
+    t=Math.max(0,Math.min(1,t));
+    const px=s[0]+dx*t, pz=s[1]+dz*t;
+    const d=(x-px)*(x-px)+(z-pz)*(z-pz);
+    if(d<best.d) best={x:px,z:pz,d};
+  }
+  return best;
+}
+
+// ==================================================================
+// Ziele (Läden) aus OSM ableiten
+// ==================================================================
+function findeMarke(name){
+  const n=(name||'').toLowerCase();
+  for(const [m,f] of MARKEN) if(n.includes(m)) return {marke:m,farbe:f};
+  return null;
+}
+function sammleZiele(elemente, heimP){
+  const kandidaten=[];
+  const shopWayFarben=new Map();
+  for(const el of elemente){
+    if(!el.tags||!el.tags.shop) continue;
+    let p;
+    if(el.type==='node') p=projiziere(el.lat,el.lon);
+    else if(el.geometry){
+      let sx=0,sz=0;
+      for(const g of el.geometry){const q=projiziere(g.lat,g.lon); sx+=q.x; sz+=q.z;}
+      p={x:sx/el.geometry.length, z:sz/el.geometry.length};
+    } else continue;
+    const name=el.tags.name||el.tags.brand||'';
+    const m=findeMarke(name)||findeMarke(el.tags.brand||'');
+    const istMall=el.tags.shop==='mall';
+    if(!m&&!istMall) continue;
+    const eintrag={
+      name:name||(istMall?'Einkaufszentrum':'Laden'),
+      schluessel:m?m.marke:(name.toLowerCase()||('mall'+el.id)),
+      farbe:m?m.farbe:MALL_FARBE,
+      x:p.x, z:p.z,
+      dist:Math.hypot(p.x-heimP.x,p.z-heimP.z)
+    };
+    kandidaten.push(eintrag);
+    if(el.type==='way') eintrag.wayId=el.id;
+  }
+  const beste=new Map();
+  for(const k of kandidaten){
+    if(!beste.has(k.schluessel)||k.dist<beste.get(k.schluessel).dist) beste.set(k.schluessel,k);
+  }
+  const ziele=[...beste.values()].sort((a,b)=>a.dist-b.dist).slice(0,MAX_ZIELE);
+  for(const z of ziele) if(z.wayId) shopWayFarben.set(z.wayId,z.farbe);
+  return {ziele, shopWayFarben};
+}
+
+function roundRect(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
+function textSprite(txt,bg,fg,skala){
+  const c=document.createElement('canvas'); c.width=512; c.height=128;
+  const g=c.getContext('2d');
+  g.fillStyle=bg; roundRect(g,4,4,504,120,28); g.fill();
+  g.strokeStyle='rgba(0,0,0,.25)'; g.lineWidth=4; g.stroke();
+  g.fillStyle=fg; g.textAlign='center'; g.textBaseline='middle';
+  let fs=58; g.font='bold '+fs+'px Arial';
+  while(g.measureText(txt).width>470&&fs>26){fs-=4; g.font='bold '+fs+'px Arial';}
+  g.fillText(txt,256,66);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c), depthTest:false}));
+  sp.scale.set(skala,skala/4,1);
+  return sp;
+}
+
+// ==================================================================
+// Fahrzeuge
+// ==================================================================
+let bremslichtMat=null;
+const vorderraeder=[], spinRaeder=[];
+function baueAuto(){
+  const g=new THREE.Group();
+  const lack=new THREE.MeshLambertMaterial({color:0x27548f});
+  const dunkel=new THREE.MeshLambertMaterial({color:0x1b1e22});
+  const glas=new THREE.MeshLambertMaterial({color:0x9fc4d8});
+  const silber=new THREE.MeshLambertMaterial({color:0xb8bec4});
+
+  const wanne=new THREE.Mesh(new THREE.BoxGeometry(1.86,0.28,4.45), dunkel);
+  wanne.position.y=0.38; g.add(wanne);
+  const body=new THREE.Mesh(new THREE.BoxGeometry(1.9,0.55,4.5), lack);
+  body.position.y=0.78; g.add(body);
+  const haube=new THREE.Mesh(new THREE.BoxGeometry(1.86,0.16,1.25), lack);
+  haube.position.set(0,1.06,-1.55); haube.rotation.x=0.06; g.add(haube);
+  const kabine=new THREE.Mesh(new THREE.BoxGeometry(1.7,0.62,2.15), glas);
+  kabine.position.set(0,1.42,0.15); g.add(kabine);
+  const dach=new THREE.Mesh(new THREE.BoxGeometry(1.74,0.1,2.0), lack);
+  dach.position.set(0,1.77,0.15); g.add(dach);
+  const scheibe=new THREE.Mesh(new THREE.PlaneGeometry(1.62,0.72), glas);
+  scheibe.position.set(0,1.42,-0.98); scheibe.rotation.x=-0.5; g.add(scheibe);
+  const bf=new THREE.Mesh(new THREE.BoxGeometry(1.92,0.24,0.28), dunkel);
+  bf.position.set(0,0.55,-2.3); g.add(bf);
+  const bh=bf.clone(); bh.position.z=2.3; g.add(bh);
+  const swMat=new THREE.MeshLambertMaterial({color:0xfff6c8, emissive:0xfff2b0, emissiveIntensity:0.7});
+  [[-0.62],[0.62]].forEach(([x])=>{
+    const sw=new THREE.Mesh(new THREE.BoxGeometry(0.34,0.16,0.08), swMat);
+    sw.position.set(x,0.86,-2.27); g.add(sw);
+  });
+  bremslichtMat=new THREE.MeshLambertMaterial({color:0x7a0d12, emissive:0xff2020, emissiveIntensity:0.15});
+  [[-0.66],[0.66]].forEach(([x])=>{
+    const rl=new THREE.Mesh(new THREE.BoxGeometry(0.36,0.16,0.08), bremslichtMat);
+    rl.position.set(x,0.9,2.27); g.add(rl);
+  });
+  const kz=new THREE.Mesh(new THREE.PlaneGeometry(0.5,0.12), new THREE.MeshBasicMaterial({color:0xffffff}));
+  kz.position.set(0,0.62,2.35); kz.rotation.y=Math.PI; g.add(kz);
+  [[-1.0],[1.0]].forEach(([x])=>{
+    const sp=new THREE.Mesh(new THREE.BoxGeometry(0.1,0.12,0.2), lack);
+    sp.position.set(x,1.3,-0.75); g.add(sp);
+  });
+  function rad(x,z,vorn){
+    const steer=new THREE.Group(); steer.position.set(x,0.42,z);
+    const spin=new THREE.Group(); steer.add(spin);
+    const reifen=new THREE.Mesh(new THREE.CylinderGeometry(0.42,0.42,0.3,18), dunkel);
+    reifen.rotation.z=Math.PI/2; spin.add(reifen);
+    const felge=new THREE.Mesh(new THREE.CylinderGeometry(0.2,0.2,0.32,10), silber);
+    felge.rotation.z=Math.PI/2; spin.add(felge);
+    g.add(steer);
+    spinRaeder.push(spin);
+    if(vorn) vorderraeder.push(steer);
+  }
+  rad(-0.98,-1.45,true); rad(0.98,-1.45,true);
+  rad(-0.98,1.5,false); rad(0.98,1.5,false);
+  return g;
+}
+function baueRadfahrer(){
+  const g=new THREE.Group();
+  const radGeo=new THREE.TorusGeometry(0.55,0.09,8,20);
+  const radMat=new THREE.MeshLambertMaterial({color:0x222222});
+  const r1=new THREE.Mesh(radGeo,radMat); r1.position.set(0,0.55,-0.85); g.add(r1);
+  const r2=new THREE.Mesh(radGeo,radMat); r2.position.set(0,0.55,0.85); g.add(r2);
+  const rahmen=new THREE.Mesh(new THREE.BoxGeometry(0.12,0.12,1.7), new THREE.MeshLambertMaterial({color:0x005CA9}));
+  rahmen.position.y=0.85; g.add(rahmen);
+  const fahrer=new THREE.Mesh(new THREE.CylinderGeometry(0.32,0.38,1.1,8), new THREE.MeshLambertMaterial({color:0x2e6b3a}));
+  fahrer.position.set(0,1.6,0.15); g.add(fahrer);
+  const kopf=new THREE.Mesh(new THREE.SphereGeometry(0.3,10,10), new THREE.MeshLambertMaterial({color:0xeac89a}));
+  kopf.position.set(0,2.4,0.15); g.add(kopf);
+  return g;
+}
+function baueFussgaenger(){
+  const g=new THREE.Group();
+  const koerper=new THREE.Mesh(new THREE.CylinderGeometry(0.35,0.42,1.2,8), new THREE.MeshLambertMaterial({color:0xc8511b}));
+  koerper.position.y=1.1; g.add(koerper);
+  const kopf=new THREE.Mesh(new THREE.SphereGeometry(0.32,10,10), new THREE.MeshLambertMaterial({color:0xeac89a}));
+  kopf.position.y=2.0; g.add(kopf);
+  const tasche=new THREE.Mesh(new THREE.BoxGeometry(0.5,0.6,0.25), new THREE.MeshLambertMaterial({color:0xFFD500}));
+  tasche.position.set(0.5,1.0,0); g.add(tasche);
+  return g;
+}
+
+// ==================================================================
+// Spielzustand & UI
+// ==================================================================
+const spieler={x:0,z:0,kurs:0,tempo:0};
+let modus='auto', gestartet=false, distanz=0, startZeit=0;
+const modi={
+  auto:{max:33, rueck:-8,  beschl:14, brems:32, lenk:1.6, kamH:9.5, kamD:17},
+  rad: {max:13, rueck:-3,  beschl:8,  brems:14, lenk:2.4, kamH:6,  kamD:11},
+  fuss:{max:5.5,rueck:-2.5,beschl:12, brems:16, lenk:3.2, kamH:4.5,kamD:8}
+};
+let fahrzeuge=null, schatten=null;
+let ziele=[], heim=null, grenzen=null;
+let ladenInNaehe=-1;
+
+const shopBtn=document.getElementById('shopBtn');
+const heimBtn=document.getElementById('heimBtn');
+const listeUl=document.getElementById('listeUl');
+document.getElementById('listeToggle').onclick=()=>document.getElementById('liste').classList.toggle('offen');
+
+let toastTimer;
+function toast(t){
+  const el=document.getElementById('toast');
+  el.textContent=t; el.style.opacity=1;
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>el.style.opacity=0,2200);
+}
+
+function setzeModus(m){
+  if(!fahrzeuge) return;
+  fahrzeuge[modus].visible=false;
+  modus=m;
+  fahrzeuge[m].visible=true;
+  spieler.tempo=Math.min(spieler.tempo,modi[m].max);
+  ['mAuto','mRad','mFuss'].forEach(id=>document.getElementById(id).classList.remove('aktiv'));
+  document.getElementById(m==='auto'?'mAuto':m==='rad'?'mRad':'mFuss').classList.add('aktiv');
+  toast(m==='auto'?'🚗 Auto':m==='rad'?'🚲 Fahrrad':'🚶 Zu Fuß');
+}
+document.getElementById('mAuto').onclick=()=>setzeModus('auto');
+document.getElementById('mRad').onclick=()=>setzeModus('rad');
+document.getElementById('mFuss').onclick=()=>setzeModus('fuss');
+
+const tasten={};
+addEventListener('keydown',e=>{tasten[e.key.toLowerCase()]=true; if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase()))e.preventDefault();});
+addEventListener('keyup',e=>tasten[e.key.toLowerCase()]=false);
+const touch={gas:false,brems:false,links:false,rechts:false};
+function halteknopf(id,fn){
+  const el=document.getElementById(id);
+  const an=e=>{e.preventDefault();fn(true);};
+  const aus=e=>{e.preventDefault();fn(false);};
+  el.addEventListener('touchstart',an,{passive:false});
+  el.addEventListener('touchend',aus);
+  el.addEventListener('touchcancel',aus);
+  el.addEventListener('mousedown',an);
+  el.addEventListener('mouseup',aus);
+  el.addEventListener('mouseleave',()=>fn(false));
+}
+halteknopf('bGas',v=>touch.gas=v);
+halteknopf('bBrems',v=>touch.brems=v);
+halteknopf('bLinks',v=>touch.links=v);
+halteknopf('bRechts',v=>touch.rechts=v);
+
+shopBtn.onclick=()=>{
+  if(ladenInNaehe<0) return;
+  const z=ziele[ladenInNaehe];
+  if(z.erledigt) return;
+  z.erledigt=true;
+  z.marke.material.color.set(0x1a8f3c);
+  document.getElementById('li'+ladenInNaehe).classList.add('done');
+  const offen=ziele.filter(x=>!x.erledigt).length;
+  toast(offen>0?'✅ '+z.name+' erledigt – noch '+offen+' Läden!':'🛍️ Alles im Wagen – ab nach Hause!');
+  shopBtn.style.display='none';
+};
+heimBtn.onclick=()=>{
+  const min=Math.round((performance.now()-startZeit)/60000*10)/10;
+  document.getElementById('winText').textContent=
+    'Du hast alle '+ziele.length+' Läden besucht, dabei ca. '+(distanz/1000).toFixed(1)+' km auf echten OSM-Straßen zurückgelegt und '+min+' Minuten gebraucht.';
+  document.getElementById('winOverlay').style.display='flex';
+};
+
+// ==================================================================
+// Minimap
+// ==================================================================
+const miniCanvas=document.getElementById('mini');
+const mini=miniCanvas.getContext('2d');
+let miniHintergrund=null;
+function miniPx(x,z){
+  return [(x-grenzen.minX)/(grenzen.maxX-grenzen.minX)*150,
+          (z-grenzen.minZ)/(grenzen.maxZ-grenzen.minZ)*150];
+}
+function baueMinimap(){
+  const off=document.createElement('canvas'); off.width=150; off.height=150;
+  const g=off.getContext('2d');
+  g.fillStyle='#69a355'; g.fillRect(0,0,150,150);
+  g.lineCap='round';
+  for(const s of miniRoads){
+    const gross=['primary','secondary','tertiary'].includes(s[4]);
+    const klein=['footway','path','cycleway','service','track'].includes(s[4]);
+    g.strokeStyle=klein?'rgba(90,90,90,.5)':'#3f4247';
+    g.lineWidth=gross?2.4:klein?0.6:1.4;
+    const [x1,y1]=miniPx(s[0],s[1]), [x2,y2]=miniPx(s[2],s[3]);
+    g.beginPath(); g.moveTo(x1,y1); g.lineTo(x2,y2); g.stroke();
+  }
+  miniHintergrund=off;
+}
+function zeichneMinimap(){
+  if(!miniHintergrund) return;
+  mini.drawImage(miniHintergrund,0,0);
+  for(const z of ziele){
+    mini.fillStyle=z.erledigt?'#1a8f3c':z.farbe;
+    const [x,y]=miniPx(z.x,z.z);
+    mini.fillRect(x-3,y-3,6,6);
+    mini.strokeStyle='#fff'; mini.lineWidth=1; mini.strokeRect(x-3,y-3,6,6);
+  }
+  const [hx,hy]=miniPx(heim.x,heim.z);
+  mini.fillStyle='#fff'; mini.font='11px Arial'; mini.fillText('🏠',hx-6,hy+4);
+  const [px,py]=miniPx(spieler.x,spieler.z);
+  mini.save(); mini.translate(px,py); mini.rotate(spieler.kurs);
+  mini.fillStyle='#FFD500'; mini.strokeStyle='#16222e'; mini.lineWidth=1;
+  mini.beginPath(); mini.moveTo(0,-6); mini.lineTo(4,4); mini.lineTo(-4,4); mini.closePath();
+  mini.fill(); mini.stroke(); mini.restore();
+}
+
+// ==================================================================
+// Ablauf: Gebiet wählen -> laden -> Welt bauen
+// ==================================================================
+const gebietWahl=document.getElementById('gebietWahl');
+document.getElementById('btnKlein').onclick=()=>starteAufbau('klein');
+document.getElementById('btnGross').onclick=()=>starteAufbau('gross');
+document.getElementById('retryBtn').onclick=()=>{
+  document.getElementById('retryBtn').style.display='none';
+  hinweisEl.textContent=''; statusEl.textContent='';
+  gebietWahl.style.display='block';
+  document.getElementById('introText').style.display='block';
+};
+
+async function starteAufbau(gebiet){
+  gebietWahl.style.display='none';
+  document.getElementById('introText').style.display='none';
+  document.getElementById('retryBtn').style.display='none';
+  spinner.style.display='block';
+  hinweisEl.textContent='Tipp: Der erste Abruf kann je nach Serverlast 10–40 Sekunden dauern.';
+
+  // Projektion aufs gewählte Gebiet einstellen
+  BBOX=GEBIETE[gebiet];
+  LAT0=(BBOX.sued+BBOX.nord)/2; LON0=(BBOX.west+BBOX.ost)/2;
+  M_LON=111320*Math.cos(LAT0*Math.PI/180);
+
+  // Boden
+  {
+    const a=projiziere(BBOX.sued,BBOX.west), b=projiziere(BBOX.nord,BBOX.ost);
+    const br=Math.abs(b.x-a.x)+400, ti=Math.abs(a.z-b.z)+400;
+    const m=new THREE.Mesh(new THREE.PlaneGeometry(br,ti), new THREE.MeshLambertMaterial({color:0x69a355}));
+    m.rotation.x=-Math.PI/2; m.position.y=-0.05;
+    szene.add(m);
+  }
+
+  let daten;
+  try{
+    daten=await ladeOSM(baueQuery(BBOX));
+  }catch(e){
+    spinner.style.display='none';
+    balkenRahmen.style.display='none';
+    status('⚠️ Kartendaten konnten nicht geladen werden.');
+    const istNetzfehler = e && (e.name==='AbortError' || e.name==='TypeError');
+    hinweisEl.textContent = istNetzfehler
+      ? 'Wichtig: In der Claude-Vorschau blockiert die Sandbox externe Downloads. Lade die HTML-Datei herunter und öffne sie direkt in Chrome/Safari oder hoste sie auf GitHub Pages – dann klappt der OpenStreetMap-Abruf. ('+(e.message||e.name)+')'
+      : 'Fehler: '+(e.message||e)+' – bitte in ein paar Minuten erneut versuchen (Overpass-Server sind manchmal ausgelastet).';
+    document.getElementById('retryBtn').style.display='inline-block';
+    return;
+  }
+
+  status('Baue Straßennetz…'); await pause();
+  const elemente=daten.elements||[];
+  const strassenWege=elemente.filter(e=>e.type==='way'&&e.tags&&e.tags.highway);
+  const gebaeudeWege=elemente.filter(e=>e.type==='way'&&e.tags&&e.tags.building);
+  baueStrassen(strassenWege);
+
+  const a=projiziere(BBOX.nord,BBOX.west), b=projiziere(BBOX.sued,BBOX.ost);
+  grenzen={minX:Math.min(a.x,b.x),maxX:Math.max(a.x,b.x),minZ:Math.min(a.z,b.z),maxZ:Math.max(a.z,b.z)};
+
+  const heimRoh=projiziere(HEIM_LATLON.lat,HEIM_LATLON.lon);
+  const heimSnap=naechsterStrassenpunkt(heimRoh.x,heimRoh.z);
+  heim={x:heimSnap.x,z:heimSnap.z};
+
+  const ergebnis=sammleZiele(elemente,heim);
+  ziele=ergebnis.ziele;
+
+  const anzahlGebaeude=await baueGebaeude(gebaeudeWege, ergebnis.shopWayFarben);
+
+  ziele.forEach((z,i)=>{
+    const tuer=naechsterStrassenpunkt(z.x,z.z);
+    z.tx=tuer.x; z.tz=tuer.z;
+    const marke=new THREE.Mesh(new THREE.RingGeometry(2.4,3.4,26),
+      new THREE.MeshBasicMaterial({color:0xFFD500,side:THREE.DoubleSide}));
+    marke.rotation.x=-Math.PI/2; marke.position.set(z.tx,0.12,z.tz);
+    szene.add(marke); z.marke=marke;
+    const hell=['#ffd400','#ffd500','#fdc300'].includes(z.farbe);
+    const schild=textSprite(z.name, z.farbe, hell?'#16222e':'#ffffff', 30);
+    schild.position.set(z.x,20,z.z);
+    szene.add(schild);
+    const li=document.createElement('li'); li.id='li'+i;
+    li.innerHTML='<span class="punkt" style="background:'+z.farbe+'"></span>'+z.name;
+    listeUl.appendChild(li);
+  });
+  const liHeim=document.createElement('li');
+  liHeim.innerHTML='<span class="punkt" style="background:#1a8f3c"></span>Zurück nach Hause';
+  listeUl.appendChild(liHeim);
+
+  const heimMarke=new THREE.Mesh(new THREE.RingGeometry(2.4,3.4,26),
+    new THREE.MeshBasicMaterial({color:0x1a8f3c,side:THREE.DoubleSide}));
+  heimMarke.rotation.x=-Math.PI/2; heimMarke.position.set(heim.x,0.12,heim.z);
+  szene.add(heimMarke);
+  const heimSchild=textSprite('🏠 Zuhause','#ffffff','#005CA9',22);
+  heimSchild.position.set(heim.x,14,heim.z); szene.add(heimSchild);
+
+  fahrzeuge={auto:baueAuto(), rad:baueRadfahrer(), fuss:baueFussgaenger()};
+  Object.values(fahrzeuge).forEach(f=>{f.visible=false; szene.add(f);});
+  fahrzeuge.auto.visible=true;
+  schatten=new THREE.Mesh(new THREE.CircleGeometry(1.7,20),
+    new THREE.MeshBasicMaterial({color:0x000000,transparent:true,opacity:0.22}));
+  schatten.rotation.x=-Math.PI/2; szene.add(schatten);
+
+  spieler.x=heim.x; spieler.z=heim.z; spieler.kurs=Math.PI;
+  kamera.position.set(heim.x,12,heim.z+20);
+
+  baueMinimap();
+
+  spinner.style.display='none';
+  balkenRahmen.style.display='none';
+  status('✅ '+anzahlGebaeude.toLocaleString('de-DE')+' echte Gebäude, '
+    +strassenWege.length.toLocaleString('de-DE')+' Straßen, '+ziele.length+' Läden geladen.');
+  hinweisEl.textContent='Kartendaten © OpenStreetMap-Mitwirkende (ODbL).';
+  document.getElementById('startBtn').style.display='inline-block';
+}
+
+document.getElementById('startBtn').onclick=()=>{
+  document.getElementById('startOverlay').style.display='none';
+  gestartet=true; startZeit=performance.now();
+  toast('Steuerung: Pfeiltasten/WASD oder Bildschirm-Tasten');
+};
+
+// ==================================================================
+// Hauptschleife
+// ==================================================================
+let vorher=performance.now();
+function schleife(t){
+  requestAnimationFrame(schleife);
+  const dt=Math.min((t-vorher)/1000,.05); vorher=t;
+  if(gestartet&&fahrzeuge){
+    const m=modi[modus];
+    let vor=0,lenk=0;
+    if(tasten['w']||tasten['arrowup']||touch.gas) vor=1;
+    if(tasten['s']||tasten['arrowdown']||touch.brems) vor=-1;
+    if(tasten['a']||tasten['arrowleft']||touch.links) lenk=1;
+    if(tasten['d']||tasten['arrowright']||touch.rechts) lenk=-1;
+
+    if(vor>0) spieler.tempo=Math.min(spieler.tempo+m.beschl*dt,m.max);
+    else if(vor<0) spieler.tempo=Math.max(spieler.tempo-m.brems*dt,m.rueck);
+    else spieler.tempo*=(1-2.0*dt);
+    if(Math.abs(spieler.tempo)<0.05) spieler.tempo=0;
+
+    const faktor=Math.min(1,Math.abs(spieler.tempo)/5+0.12);
+    spieler.kurs+=lenk*m.lenk*faktor*dt*Math.sign(spieler.tempo||1);
+
+    const nx=spieler.x-Math.sin(spieler.kurs)*spieler.tempo*dt;
+    const nz=spieler.z-Math.cos(spieler.kurs)*spieler.tempo*dt;
+    const imFeld=nx>grenzen.minX+5&&nx<grenzen.maxX-5&&nz>grenzen.minZ+5&&nz<grenzen.maxZ-5;
+    if(!kollidiert(nx,nz,1.2)&&imFeld){
+      distanz+=Math.abs(spieler.tempo)*dt;
+      spieler.x=nx; spieler.z=nz;
+    }else{
+      spieler.tempo*=-0.25;
+    }
+
+    const f=fahrzeuge[modus];
+    f.position.set(spieler.x,0,spieler.z);
+    f.rotation.y=spieler.kurs;
+    if(modus==='auto'){
+      for(const r of vorderraeder) r.rotation.y=lenk*0.45;
+      for(const r of spinRaeder) r.rotation.x-=spieler.tempo*dt/0.42;
+      if(bremslichtMat) bremslichtMat.emissiveIntensity=(vor<0&&spieler.tempo>0)?1.0:0.15;
+    }
+    if(modus==='fuss') f.position.y=Math.abs(Math.sin(t/130))*0.12*(Math.abs(spieler.tempo)>0.2?1:0);
+    schatten.position.set(spieler.x,0.03,spieler.z);
+
+    const kx=spieler.x+Math.sin(spieler.kurs)*m.kamD;
+    const kz=spieler.z+Math.cos(spieler.kurs)*m.kamD;
+    kamera.position.lerp(new THREE.Vector3(kx,m.kamH,kz),1-Math.pow(0.001,dt));
+    kamera.lookAt(spieler.x,2,spieler.z);
+
+    ladenInNaehe=-1;
+    for(let i=0;i<ziele.length;i++){
+      const z=ziele[i];
+      if(!z.erledigt&&Math.hypot(spieler.x-z.tx,spieler.z-z.tz)<10){ladenInNaehe=i;break;}
+    }
+    shopBtn.style.display=ladenInNaehe>=0?'block':'none';
+    if(ladenInNaehe>=0) shopBtn.textContent='🛒 Bei '+ziele[ladenInNaehe].name+' einkaufen';
+
+    const alle=ziele.length>0&&ziele.every(z=>z.erledigt);
+    const daheim=Math.hypot(spieler.x-heim.x,spieler.z-heim.z)<11;
+    heimBtn.style.display=(alle&&daheim)?'block':'none';
+
+    document.getElementById('tacho').textContent=
+      Math.round(Math.abs(spieler.tempo)*3.6)+' km/h · '+(distanz/1000).toFixed(1)+' km';
+    zeichneMinimap();
+  }
+  renderer.render(szene,kamera);
+}
+requestAnimationFrame(schleife);
+
+addEventListener('resize',()=>{
+  kamera.aspect=innerWidth/innerHeight;
+  kamera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>
