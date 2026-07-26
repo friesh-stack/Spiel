@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lurup CityGML-Basis (Hamburg 3D-Stadtmodell)</title>
+<style>
+  :root{ --blau:#005CA9; --dunkel:#16222e; }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;background:#0b1622}
+  canvas{display:block}
+  #hud{position:fixed;top:10px;left:10px;z-index:5;background:rgba(255,255,255,.94);border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.25);padding:10px 12px;font-size:12px;color:#334;max-width:260px}
+  #hud b{color:var(--blau)}
+  #attrib{position:fixed;bottom:4px;left:6px;z-index:5;font-size:10px;color:rgba(255,255,255,.8);text-shadow:0 1px 2px #000}
+  .overlay{position:fixed;inset:0;background:rgba(8,20,33,.9);display:flex;align-items:center;justify-content:center;z-index:20;padding:20px}
+  .box{background:#fff;border-radius:16px;padding:24px 22px;max-width:460px;max-height:92vh;overflow:auto}
+  .box h1{font-size:20px;color:var(--dunkel);margin-bottom:10px}
+  .box p{font-size:13px;color:#445;line-height:1.55;margin-bottom:8px}
+  .box ol{font-size:13px;color:#445;line-height:1.5;margin:6px 0 6px 18px}
+  .box a{color:var(--blau)}
+  .box input[type=file],.box input[type=text]{width:100%;padding:10px;font-size:13px;border:2px solid #d3dde8;border-radius:10px;margin:6px 0;background:#f7fafc}
+  .box .btn{margin-top:8px;padding:11px 22px;font-size:15px;font-weight:600;background:var(--blau);color:#fff;border:none;border-radius:999px;cursor:pointer}
+  .box .btn.zweit{background:#eef3f8;color:var(--blau)}
+  .box .hinweis{font-size:11.5px;color:#889;margin-top:8px}
+  #status{font-size:13px;color:var(--blau);font-weight:600;min-height:18px;margin-top:6px}
+  .spinner{width:28px;height:28px;border:4px solid #dcebf9;border-top-color:var(--blau);border-radius:50%;margin:8px auto;animation:d 1s linear infinite;display:none}
+  @keyframes d{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud" style="display:none">
+  <div><b>Lurup CityGML-Basis</b></div>
+  <div id="hudInfo">–</div>
+  <div style="margin-top:6px;color:#667">Maus: ziehen = drehen · Rad = zoomen · Rechts-Ziehen = schieben</div>
+</div>
+<div id="attrib"></div>
+
+<div class="overlay" id="startOverlay">
+  <div class="box">
+    <h1>🏙️ Lurup 3D – Fundament aus Hamburgs 3D-Stadtmodell</h1>
+    <p>Dieses Gerüst lädt eine <b>CityGML-Kachel</b> von Hamburgs offenem 3D-Stadtmodell (LGV) direkt im Browser und baut daraus die echten Gebäude – ganz ohne externe Konvertierung.</p>
+    <p><b>So kommst du an die Daten für Lurup/Eidelstedt:</b></p>
+    <ol>
+      <li>Beim LGV/Transparenzportal das <b>LoD2-DE</b> (ganz Hamburg) oder das detailliertere <b>LoD3.0-HH, Area 4</b> (Altona/Hamburgs Westen) laden.</li>
+      <li>Aus dem Paket die 1&nbsp;km-Kachel(n) heraussuchen, in denen Lurup/Eidelstedt liegt (Layer „ETRS89-UTM-1km").</li>
+      <li>Die entpackte <code>.gml</code>/<code>.xml</code>-Kachel unten auswählen.</li>
+    </ol>
+    <input id="fileInput" type="file" accept=".gml,.xml">
+    <p class="hinweis">Alternativ eine bereits konvertierte 3D-Datei laden (glTF/GLB-URL):</p>
+    <input id="glbInput" type="text" placeholder="https://…/lurup.glb" spellcheck="false">
+    <div class="spinner" id="spinner"></div>
+    <div id="status"></div>
+    <button class="btn" id="ladenBtn">Kachel laden &amp; anzeigen</button>
+    <button class="btn zweit" id="demoBtn">Ohne Daten: Demo-Block ansehen</button>
+    <p class="hinweis">Datenquelle: Freie und Hansestadt Hamburg, Landesbetrieb Geoinformation und Vermessung (LGV), Datenlizenz Deutschland – Namensnennung 2.0 (dl-de/by-2-0). Große Kacheln brauchen einen Moment zum Parsen.</p>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script>
+'use strict';
+// ==================================================================
+// Szene
+// ==================================================================
+const renderer=new THREE.WebGLRenderer({canvas:document.getElementById('c'),antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+renderer.outputEncoding=THREE.sRGBEncoding;
+renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+
+const szene=new THREE.Scene();
+szene.background=new THREE.Color(0xbcd3e8);
+szene.fog=new THREE.Fog(0xbcd3e8,900,2600);
+
+const kamera=new THREE.PerspectiveCamera(58,innerWidth/innerHeight,1,6000);
+kamera.position.set(300,300,300);
+const controls=new THREE.OrbitControls(kamera,renderer.domElement);
+controls.enableDamping=true; controls.dampingFactor=0.08; controls.maxPolarAngle=Math.PI*0.495;
+
+szene.add(new THREE.HemisphereLight(0xeaf3ff,0x55603f,0.9));
+const sonne=new THREE.DirectionalLight(0xfff2d8,1.0);
+sonne.position.set(500,800,300); sonne.castShadow=true;
+sonne.shadow.mapSize.set(2048,2048);
+sonne.shadow.camera.near=10; sonne.shadow.camera.far=3000;
+sonne.shadow.camera.left=-800; sonne.shadow.camera.right=800; sonne.shadow.camera.top=800; sonne.shadow.camera.bottom=-800;
+szene.add(sonne); szene.add(sonne.target);
+
+let bodenMesh=null, stadtGruppe=null;
+
+// ==================================================================
+// UI
+// ==================================================================
+const statusEl=document.getElementById('status'), spinner=document.getElementById('spinner');
+function status(t){statusEl.textContent=t;}
+function pause(){return new Promise(r=>setTimeout(r,20));}
+
+document.getElementById('ladenBtn').onclick=async()=>{
+  const glb=document.getElementById('glbInput').value.trim();
+  const datei=document.getElementById('fileInput').files[0];
+  if(glb){ spinner.style.display='block'; await ladeGLB(glb); return; }
+  if(!datei){ status('Bitte eine .gml-Kachel wählen oder eine glTF-URL eintragen.'); return; }
+  spinner.style.display='block';
+  status('Lese Datei…'); await pause();
+  const text=await datei.text();
+  status('Parse CityGML… ('+(text.length/1048576).toFixed(1)+' MB)'); await pause();
+  try{ await baueAusCityGML(text); }
+  catch(e){ spinner.style.display='none'; status('⚠️ Konnte CityGML nicht verarbeiten: '+(e&&e.message?e.message:e)); }
+};
+document.getElementById('demoBtn').onclick=()=>{ baueDemo(); fertig('Demo-Block (Platzhalter)'); };
+
+// ==================================================================
+// GLB-Pfad (bereits konvertierte Daten)
+// ==================================================================
+function ladeGLB(url){
+  return new Promise((res)=>{
+    const loader=new THREE.GLTFLoader();
+    status('Lade glTF…');
+    loader.load(url,(g)=>{
+      stadtGruppe=g.scene; stadtGruppe.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}});
+      szene.add(stadtGruppe);
+      zentriere(new THREE.Box3().setFromObject(stadtGruppe));
+      fertig('glTF geladen'); res();
+    },undefined,(err)=>{ spinner.style.display='none'; status('⚠️ glTF-Fehler: '+(err&&err.message?err.message:'nicht ladbar (CORS/URL?)')); res(); });
+  });
+}
+
+// ==================================================================
+// CityGML direkt parsen (LoD2 / LoD3, ETRS89-UTM32 / EPSG:25832)
+// ==================================================================
+function flaecheTyp(el){
+  let p=el;
+  for(let i=0;i<9&&p;i++){
+    const ln=(p.localName||'').toLowerCase();
+    if(ln.includes('roof'))return 'dach';
+    if(ln.includes('wall'))return 'wand';
+    if(ln.includes('ground'))return 'boden';
+    if(ln.includes('closure'))return 'skip';
+    if(ln.includes('window'))return 'fenster';
+    if(ln.includes('door'))return 'tuer';
+    p=p.parentElement;
+  }
+  return 'wand';
+}
+const FARBEN={dach:[0.60,0.29,0.24], wand:[0.85,0.82,0.76], boden:[0.32,0.34,0.30], fenster:[0.55,0.70,0.85], tuer:[0.45,0.33,0.24]};
+
+async function baueAusCityGML(text){
+  const dom=new DOMParser().parseFromString(text,'application/xml');
+  if(dom.getElementsByTagName('parsererror').length){ throw new Error('XML-Parserfehler'); }
+  // alle posList (namespace-unabhängig)
+  const posls=dom.getElementsByTagNameNS('*','posList');
+  if(!posls.length){ throw new Error('Keine <posList>-Geometrie gefunden – ist das eine CityGML-Kachel?'); }
+  status('Verarbeite '+posls.length.toLocaleString('de-DE')+' Flächen…'); await pause();
+
+  // Pass 1: Bounding-Box (UTM-Meter) bestimmen
+  const ringe=[]; // {typ, pts:[[e,n,h],...]}
+  let minE=1e18,maxE=-1e18,minN=1e18,maxN=-1e18;
+  for(let i=0;i<posls.length;i++){
+    const pl=posls[i];
+    const typ=flaecheTyp(pl);
+    if(typ==='skip'||typ==='boden') continue;
+    let dim=parseInt(pl.getAttribute('srsDimension')||'0',10);
+    const nums=pl.textContent.trim().split(/\s+/).map(Number);
+    if(!dim) dim = (nums.length%3===0)?3:2;
+    const pts=[];
+    for(let k=0;k+dim<=nums.length;k+=dim){
+      const e=nums[k], n=nums[k+1], h=dim>=3?nums[k+2]:0;
+      pts.push([e,n,h]);
+      if(e<minE)minE=e; if(e>maxE)maxE=e; if(n<minN)minN=n; if(n>maxN)maxN=n;
+    }
+    if(pts.length>=3) ringe.push({typ,pts});
+  }
+  if(!ringe.length){ throw new Error('Keine verwertbaren Wand-/Dachflächen gefunden.'); }
+  const cE=(minE+maxE)/2, cN=(minN+maxN)/2;
+
+  // Pass 2: Meshes bauen (x=Ost, z=Nord invertiert, y=Höhe)
+  status('Baue '+ringe.length.toLocaleString('de-DE')+' Flächen zu 3D…'); await pause();
+  const pos=[], col=[];
+  for(const r of ringe){
+    const f=FARBEN[r.typ]||FARBEN.wand;
+    const v=r.pts.map(([e,n,h])=>[e-cE, h, -(n-cN)]);
+    // Fächer-Triangulierung (LoD2/3-Flächen sind i. d. R. einfache Polygone)
+    for(let t=1;t<v.length-1;t++){
+      pos.push(v[0][0],v[0][1],v[0][2], v[t][0],v[t][1],v[t][2], v[t+1][0],v[t+1][1],v[t+1][2]);
+      for(let s=0;s<3;s++) col.push(f[0],f[1],f[2]);
+    }
+  }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  geo.setAttribute('color',new THREE.Float32BufferAttribute(col,3));
+  geo.computeVertexNormals();
+  stadtGruppe=new THREE.Mesh(geo,new THREE.MeshLambertMaterial({vertexColors:true,side:THREE.DoubleSide}));
+  stadtGruppe.castShadow=true; stadtGruppe.receiveShadow=true;
+  szene.add(stadtGruppe);
+
+  const box=new THREE.Box3().setFromObject(stadtGruppe);
+  // Grundfläche unter der Stadt (auf tatsächliche Unterkante)
+  const spanE=maxE-minE, spanN=maxN-minN;
+  bodenMesh=new THREE.Mesh(new THREE.PlaneGeometry(spanE+400,spanN+400), new THREE.MeshLambertMaterial({color:0x6f8f5a}));
+  bodenMesh.rotation.x=-Math.PI/2; bodenMesh.position.y=box.min.y-0.1; bodenMesh.receiveShadow=true; szene.add(bodenMesh);
+
+  zentriere(box);
+  fertig(ringe.length.toLocaleString('de-DE')+' Flächen · '+(pos.length/9|0).toLocaleString('de-DE')+' Dreiecke · Ausschnitt '+Math.round(spanE)+'×'+Math.round(spanN)+' m');
+}
+
+function baueDemo(){
+  stadtGruppe=new THREE.Group();
+  const farben=[0xd8d2c6,0xcabfa8,0xe0d8c8];
+  for(let i=0;i<60;i++){
+    const w=8+Math.random()*14, d=8+Math.random()*14, h=8+Math.random()*40;
+    const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),new THREE.MeshLambertMaterial({color:farben[i%3]}));
+    m.position.set((Math.random()-0.5)*400,h/2,(Math.random()-0.5)*400); m.castShadow=true; m.receiveShadow=true;
+    stadtGruppe.add(m);
+    const dach=new THREE.Mesh(new THREE.BoxGeometry(w+0.5,1.5,d+0.5),new THREE.MeshLambertMaterial({color:0x9a4b3a})); dach.position.set(m.position.x,h,m.position.z); stadtGruppe.add(dach);
+  }
+  szene.add(stadtGruppe);
+  bodenMesh=new THREE.Mesh(new THREE.PlaneGeometry(1200,1200),new THREE.MeshLambertMaterial({color:0x6f8f5a})); bodenMesh.rotation.x=-Math.PI/2; bodenMesh.receiveShadow=true; szene.add(bodenMesh);
+  zentriere(new THREE.Box3().setFromObject(stadtGruppe));
+}
+
+function zentriere(box){
+  const c=new THREE.Vector3(), s=new THREE.Vector3();
+  box.getCenter(c); box.getSize(s);
+  const r=Math.max(s.x,s.z,50);
+  controls.target.copy(new THREE.Vector3(c.x,box.min.y,c.z));
+  kamera.position.set(c.x+r*0.7, box.max.y+r*0.6, c.z+r*0.7);
+  kamera.near=Math.max(1,r/500); kamera.far=r*12; kamera.updateProjectionMatrix();
+  sonne.position.set(c.x+r,box.max.y+r*1.5,c.z+r*0.6); sonne.target.position.copy(c);
+  const d=Math.max(s.x,s.z);
+  sonne.shadow.camera.left=-d; sonne.shadow.camera.right=d; sonne.shadow.camera.top=d; sonne.shadow.camera.bottom=-d; sonne.shadow.camera.updateProjectionMatrix();
+}
+function fertig(info){
+  spinner.style.display='none';
+  document.getElementById('startOverlay').style.display='none';
+  document.getElementById('hud').style.display='block';
+  document.getElementById('hudInfo').textContent=info;
+  document.getElementById('attrib').textContent='© Freie und Hansestadt Hamburg, LGV (dl-de/by-2-0)';
+}
+
+// ==================================================================
+// Render-Schleife
+// ==================================================================
+(function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(szene,kamera); })();
+addEventListener('resize',()=>{ kamera.aspect=innerWidth/innerHeight; kamera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+</script>
+</body>
+</html>
